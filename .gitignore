@@ -1,0 +1,19 @@
+# Fetched by scripts/fetch-deps.ps1 (pinned commits in README.md)
+/deps/
+
+# CMake / Visual Studio build output
+/build/
+/out/
+
+# IDE
+.vs/
+*.user
+*.suo
+*.sdf
+*.opensdf
+
+# Binaries
+*.exe
+*.pdb
+*.ilk
+*.obj
