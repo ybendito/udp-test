@@ -101,9 +101,9 @@ inline void print_client_help(const char* program)
         << ", max " << kUsoMaxSegmentSize << "; 0 = plain send, no USO)\n"
         << "  --help, -h           Show this help\n"
         << "\n"
-        << "One buffer per batch (header.length = --size). --mss 0: one WSASend/\n"
-        << "sendto (IP may fragment on wire; recv gets full datagram). Otherwise\n"
-        << "segmented at --mss; last segment shorter when size % mss != 0.\n";
+        << "One buffer per batch (header.length = --size). Plain sendto (no USO) when\n"
+        << "--mss 0 or --size < --mss. Otherwise segmented at --mss; last segment\n"
+        << "shorter when size % mss != 0.\n";
 }
 
 inline bool parse_server_options(int argc, char* argv[], ServerOptions& out)

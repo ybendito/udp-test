@@ -54,7 +54,7 @@ void send_batch_windows(
 
 
 
-    if (mss == 0) {
+    if (mss == 0 || batch_size < mss) {
 
         std::cout << "  plain " << result.total_bytes << " bytes (one datagram, no USO)\n";
 

@@ -110,6 +110,38 @@ sockaddr_in6 to_sockaddr_v6(const boost::asio::ip::address_v6& address)
     return sa;
 }
 
+bool send_plain_datagram(
+    SOCKET sock,
+    const char* data,
+    std::size_t total_size,
+    const boost::asio::ip::udp::endpoint& target,
+    std::string& error)
+{
+    sockaddr_storage dest_storage {};
+    int dest_len = 0;
+    if (!endpoint_to_sockaddr(target, dest_storage, dest_len)) {
+        error = "unsupported target address family";
+        return false;
+    }
+
+    const int sent = sendto(
+        sock,
+        data,
+        static_cast<int>(total_size),
+        0,
+        reinterpret_cast<sockaddr*>(&dest_storage),
+        dest_len);
+    if (sent == SOCKET_ERROR) {
+        error = "sendto failed: " + std::to_string(WSAGetLastError());
+        return false;
+    }
+    if (static_cast<std::size_t>(sent) != total_size) {
+        error = "short plain send";
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 UsoSendResult send_buffer_uso(
@@ -132,31 +164,11 @@ UsoSendResult send_buffer_uso(
         return result;
     }
 
-    // mss==0: one datagram, no USO (OS may IP-fragment if > path MTU).
-    if (mss == 0) {
-        sockaddr_storage dest_storage {};
-        int dest_len = 0;
-        if (!endpoint_to_sockaddr(target, dest_storage, dest_len)) {
-            result.error = "unsupported target address family";
+    // Plain send: --mss 0, or batch smaller than segment size (USO cannot apply).
+    if (mss == 0 || total_size < mss) {
+        if (!send_plain_datagram(sock, data, total_size, target, result.error)) {
             return result;
         }
-
-        const int sent = sendto(
-            sock,
-            data,
-            static_cast<int>(total_size),
-            0,
-            reinterpret_cast<sockaddr*>(&dest_storage),
-            dest_len);
-        if (sent == SOCKET_ERROR) {
-            result.error = "sendto failed: " + std::to_string(WSAGetLastError());
-            return result;
-        }
-        if (static_cast<std::size_t>(sent) != total_size) {
-            result.error = "short plain send";
-            return result;
-        }
-
         result.success = true;
         result.segments_sent = 1;
         result.total_bytes = total_size;
@@ -169,17 +181,6 @@ UsoSendResult send_buffer_uso(
     }
 
     const std::size_t segments = (total_size + mss - 1) / mss;
-
-    if (segments == 1) {
-        if (!send_single_uso(native_socket, data, total_size)) {
-            result.error = "WSASend failed for single-segment batch";
-            return result;
-        }
-        result.success = true;
-        result.segments_sent = 1;
-        result.total_bytes = total_size;
-        return result;
-    }
 
     const WSASendMsgFn wsasendmsg = resolve_wsasendmsg(sock);
     if (!wsasendmsg) {
