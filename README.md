@@ -77,6 +77,8 @@ build\Release\boostudp_client.exe
 build\Release\boostudp_server.exe
 ```
 
+Release builds link the **static MSVC runtime** (`/MT`), so the exes do not require the Visual C++ Redistributable (`vcruntime140.dll`, `msvcp140.dll`, etc.) on the target PC. Re-run `cmake ..` in `build/` after pulling if you had an older `/MD` build tree.
+
 ### Manual CMake
 
 ```bat
