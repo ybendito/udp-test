@@ -16,6 +16,10 @@ struct ServerOptions {
     std::optional<std::size_t> batchCount;
     bool verbose = false;
     bool uro = false;
+    // Idle-mode only (--count unset): repeat after each idle timeout.
+    // loopCount unset = run forever; N = stop after N idle sessions.
+    bool loop = false;
+    std::optional<std::size_t> loopCount;
 };
 
 struct ClientOptions {
@@ -25,6 +29,8 @@ struct ClientOptions {
     std::size_t batchSize = 0;
     std::size_t batchCount = 10;
     std::size_t mss = kDefaultMss;
+    bool noPktinfo = false;
+    bool completionRoutine = false;
 };
 
 namespace detail {
@@ -70,6 +76,8 @@ inline void print_server_help(const char* program)
         << "  --bind <address>   Local address to bind (default: 0.0.0.0)\n"
         << "  --port <port>      UDP port to listen on (required)\n"
         << "  --count <n>        Receive exactly n logical batches, then exit\n"
+        << "  --loop [<n>]       Repeat idle sessions (no --count); optional n\n"
+        << "                       (default: forever). One summary per session.\n"
         << "  -v                 Verbose logging\n"
         << "  --uro              WSARecvMsg + UDP_RECV_MAX_COALESCED_SIZE\n"
         << "                       (socket-level coalesce; Win10 2004+)\n"
@@ -79,7 +87,8 @@ inline void print_server_help(const char* program)
         << "With --uro: one read may contain many segments (coalesced recv).\n"
         << "Sender --mss 0: one datagram per batch (frags=1); IP may fragment on wire.\n"
         << "Both paths use the same app reassembly. Compare frags vs batches.\n"
-        << "Without --count: idle timeout after first traffic.\n";
+        << "Without --count: idle timeout after first traffic.\n"
+        << "Use --loop to run another idle session after each summary.\n";
 }
 
 inline void print_client_help(const char* program)
@@ -91,14 +100,18 @@ inline void print_client_help(const char* program)
         << "Trace guest vNIC for large send NBL; match --size and --mss.\n"
         << "\n"
         << "Options:\n"
-        << "  --source <address>   Local bind address (default: 0.0.0.0)\n"
+        << "  --source <address>   Bind IP; 0.0.0.0 = auto egress NIC toward --dest\n"
         << "  --dest <address>     Destination host (required)\n"
         << "  --port <port>        Destination UDP port (required)\n"
         << "  --size <bytes>       Total logical batch size (one header), "
-        << kPacketHeaderSize << ".." << kMaxBatchSize << " (required)\n"
+        << kPacketHeaderSize << ".." << kMaxBatchSize
+        << " (required; includes " << kPacketHeaderSize << "-byte BDUP header)\n"
         << "  --count <n>          Number of batches to send (default: 10)\n"
         << "  --mss <bytes>        USO segment size (default: " << kDefaultMss
         << ", max " << kUsoMaxSegmentSize << "; 0 = plain send, no USO)\n"
+        << "  --no-pktinfo         WSASendMsg without IP_PKTINFO (bind-only USO test)\n"
+        << "  --completion-routine WSASendMsg with LPWSAOVERLAPPED_COMPLETION_ROUTINE\n"
+        << "                       (alertable SleepEx; default: sync NULL overlapped)\n"
         << "  --help, -h           Show this help\n"
         << "\n"
         << "One buffer per batch (header.length = --size). Plain sendto (no USO) when\n"
@@ -135,6 +148,20 @@ inline bool parse_server_options(int argc, char* argv[], ServerOptions& out)
             out.verbose = true;
         } else if (key == "--uro") {
             out.uro = true;
+        } else if (key == "--loop") {
+            if (out.batchCount) {
+                throw std::invalid_argument("--loop cannot be used with --count");
+            }
+            out.loop = true;
+            const char* eq = std::strchr(argv[i], '=');
+            if (eq) {
+                out.loopCount = parse_count(eq + 1);
+            } else if (i + 1 < argc && argv[i + 1][0] != '-') {
+                const char* next = argv[i + 1];
+                if (next[0] >= '0' && next[0] <= '9') {
+                    out.loopCount = parse_count(argv[++i]);
+                }
+            }
         } else {
             throw std::invalid_argument("unknown option: " + key);
         }
@@ -182,8 +209,10 @@ inline bool parse_client_options(int argc, char* argv[], ClientOptions& out)
             out.batchCount = parse_count(detail::option_value(argv[i], i, argc, argv));
         } else if (key == "--mss") {
             out.mss = parse_mss(detail::option_value(argv[i], i, argc, argv));
-        } else if (key == "--uso") {
-            throw std::invalid_argument("--uso is always enabled on Windows (removed)");
+        } else if (key == "--no-pktinfo") {
+            out.noPktinfo = true;
+        } else if (key == "--completion-routine") {
+            out.completionRoutine = true;
         } else {
             throw std::invalid_argument("unknown option: " + key);
         }

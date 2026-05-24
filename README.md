@@ -13,20 +13,31 @@ Binaries:
 
 - **Windows 10 2004+** (build 19041+) for USO / software receive coalescing APIs
 - **Visual Studio 2019** (or newer) with C++ desktop workload and **CMake** (3.16+)
-- **Git** (to fetch vendored dependencies)
+- **Git** (to fetch vendored Boost)
+
+USO behavior varies by OS build, NIC driver, and installed filters. The client prints `windows build N` at startup. If `WSASendMsg` fails, the client reports the error and exits — there is no silent fallback to manual multi-datagram send.
+
+Reported in testing:
+
+| Build | Behavior |
+|-------|----------|
+| **20080** | `WSASendMsg` USO works; multi-homed OK with default `--source` (egress + `IP_PKTINFO` ifindex toward `--dest`). |
+| **21000** | `WSASendMsg` fails (e.g. 10022); not suitable for this tool. |
+| **26100 / Windows 11 2025** | `WSASendMsg` succeeds; whether NDIS sees hardware USO depends on driver/filters (investigate separately). Default `IP_PKTINFO` path works on 26100 in recent testing. |
+
+If routing is ambiguous, set `--source` to the IP on the subnet that reaches `--dest`.
 
 ## Dependencies
 
-The project vendors **Boost.Asio** (header-only subset via Boost superproject submodules). A standalone **Asio** tree is also fetched for reference; the build uses **Boost’s** `libs/asio`.
+Vendored **Boost.Asio** (header-only subset via Boost superproject submodules).
 
 | Dependency | Repository | Commit (verified) |
 |------------|------------|-------------------|
 | Boost superproject | https://github.com/boostorg/boost | `8c3ca159ca9e5ac4b56ced6a6f146d5fef3650bc` |
-| Standalone Asio (optional) | https://github.com/chriskohlhoff/asio | `bd500f0a018db9a845ebaaed5c0318343ae9f497` |
 
-After checking out the Boost commit above, initialize only the submodules required by this repo (see script below). Boost’s bundled `libs/asio` at that revision is commit `7b56b644c9819be94b7b601823a65087a7c29f2e`.
+After checking out the Boost commit above, initialize only the submodules required by this repo (see script below).
 
-### Fetch dependencies (recommended)
+### Fetch dependencies
 
 From the repo root in PowerShell:
 
@@ -34,31 +45,9 @@ From the repo root in PowerShell:
 .\scripts\fetch-deps.ps1
 ```
 
-The script clones into `deps/`, checks out the pinned commits, and runs `git submodule update --init` for the Boost libraries listed in `cmake/BoostDeps.cmake`.
+The script clones into `deps/` and runs `git submodule update --init` for the Boost libraries listed in `cmake/BoostDeps.cmake`.
 
-If `deps/` already exists, the script skips cloning; delete `deps/boost` or `deps/asio` to re-fetch.
-
-### Fetch dependencies (manual, pinned)
-
-```powershell
-mkdir deps
-cd deps
-
-git clone https://github.com/boostorg/boost.git boost
-cd boost
-git checkout 8c3ca159ca9e5ac4b56ced6a6f146d5fef3650bc
-git submodule update --init `
-  libs/align libs/asio libs/assert libs/config libs/core `
-  libs/integer libs/io libs/mpl libs/optional libs/predef `
-  libs/preprocessor libs/smart_ptr libs/static_assert libs/system `
-  libs/throw_exception libs/type_traits libs/utility libs/winapi
-cd ..
-
-git clone https://github.com/chriskohlhoff/asio.git asio
-cd asio
-git checkout bd500f0a018db9a845ebaaed5c0318343ae9f497
-cd ..\..
-```
+If `deps/boost` already exists, the script skips cloning; delete it to re-fetch.
 
 ## Build
 
@@ -77,7 +66,7 @@ build\Release\boostudp_client.exe
 build\Release\boostudp_server.exe
 ```
 
-Release builds link the **static MSVC runtime** (`/MT`), so the exes do not require the Visual C++ Redistributable (`vcruntime140.dll`, `msvcp140.dll`, etc.) on the target PC. Re-run `cmake ..` in `build/` after pulling if you had an older `/MD` build tree.
+Release builds link the **static MSVC runtime** (`/MT`).
 
 ### Manual CMake
 
@@ -98,18 +87,23 @@ Replace addresses/ports for your lab (example: guest `10.0.0.7`, PC `10.0.0.15`,
 build\Release\boostudp_server.exe --port 5000 --count 10 -v
 ```
 
-Optional receive coalescing (compare `frags=` vs default `recvfrom`):
+Optional receive coalescing:
 
 ```text
 build\Release\boostudp_server.exe --port 5000 --count 10 -v --uro
 ```
 
-Without `--count`, the server exits after an idle timeout once traffic stops.
+Without `--count`, the server exits after an idle timeout once traffic stops. Use **`--loop`** to start another idle session after each summary (not combinable with `--count`).
+
+```text
+build\Release\boostudp_server.exe --port 5000 -v --loop
+build\Release\boostudp_server.exe --port 5000 -v --loop 5
+```
 
 Verbose output:
 
 - **Single datagram per batch** (`--mss 0` on sender): `ok seq=N 33792b`
-- **Reassembled from multiple UDP segments**: `ok seq=N 33792b mss=1408 segs=24`
+- **Reassembled from multiple UDP segments**: `ok seq=N 33792b mss=1408 segs=24` (`mss` matches sender `--mss`, not the first post-header slice)
 
 Summary line: `batches=… frags=… bad=… lost=… dup=… ooo=…`
 
@@ -119,6 +113,13 @@ Summary line: `batches=… frags=… bad=… lost=… dup=… ooo=…`
 
 ```text
 build\Release\boostudp_client.exe --dest 10.0.0.15 --port 5000 --size 33792 --mss 1408 --count 10
+```
+
+**Guest vNIC / hardware USO** (trace large send NBL): bind to the NIC that routes to `--dest`.
+
+```text
+build\Release\boostudp_client.exe --source 10.0.0.7 --dest 10.0.0.15 --port 5000 --size 5120 --mss 1408 --count 10
+build\Release\boostudp_client.exe --dest 10.0.0.15 --port 5000 --size 5120 --mss 1408 --count 10
 ```
 
 **Plain UDP** (one datagram per batch; IP may fragment on the wire):
@@ -136,6 +137,7 @@ build\Release\boostudp_client.exe --dest 10.0.0.15 --port 5000 --size 33792 --ms
 | `--bind <addr>` | Bind address (default `0.0.0.0`) |
 | `--port <port>` | Listen port (required) |
 | `--count <n>` | Exit after `n` valid batches |
+| `--loop [<n>]` | Repeat idle sessions (requires no `--count`); `n` optional (default: forever) |
 | `-v` | Verbose per-batch / reassembly logs |
 | `--uro` | `WSARecvMsg` + `UDP_RECV_MAX_COALESCED_SIZE` (64 KiB) |
 
@@ -143,12 +145,14 @@ build\Release\boostudp_client.exe --dest 10.0.0.15 --port 5000 --size 33792 --ms
 
 | Option | Description |
 |--------|-------------|
-| `--source <addr>` | Local bind (default `0.0.0.0`) |
+| `--source <addr>` | Local bind (default `0.0.0.0` = auto egress toward `--dest`) |
 | `--dest <addr>` | Destination host (required) |
 | `--port <port>` | Destination port (required) |
 | `--size <bytes>` | Logical batch size, 16..65536 (required; includes 16-byte BDUP header) |
 | `--count <n>` | Batches to send (default `10`) |
 | `--mss <bytes>` | USO segment size (default `1400`; `0` = plain `sendto`, no USO) |
+| `--no-pktinfo` | `WSASendMsg` without `IP_PKTINFO` (bind-only; logs `path=bind-only`) |
+| `--completion-routine` | `WSASendMsg` with completion routine + alertable `SleepEx` |
 
 ### Wireshark
 
@@ -162,7 +166,19 @@ With `--mss 1408` and `--size 33792`, expect many ~1408-byte UDP frames. With `-
 
 ## Protocol sketch
 
-Each batch is one buffer with a fixed header (`magic`, `seq`, `length`, `crc32`) and random payload. `length` equals `--size`. The sender CRCs the full buffer; the receiver reassembles fragments until `length` bytes arrive, then validates.
+Each batch is one buffer with a fixed **20-byte** header and random payload. `length` equals `--size` (includes the header). The sender CRCs the full buffer; the receiver reassembles fragments until `length` bytes arrive, then validates.
+
+```text
+struct PacketHeader {   // packed, little-endian on x86
+    uint32_t magic;       // 0x42554450 ("BDUP")
+    uint32_t seq;         // 0 .. batch_total-1
+    uint32_t batch_total; // sender --count (same on every batch in a run)
+    uint32_t length;      // total bytes == --size
+    uint32_t crc32;       // CRC over full batch with crc32=0
+};
+```
+
+`batch_total` helps the receiver resync after a bad segment: rescan only accepts headers where `seq < batch_total`, and `lost` can use `batch_total` from the wire when the server has no `--count`.
 
 ## Limits
 
@@ -171,9 +187,9 @@ Each batch is one buffer with a fixed header (`magic`, `seq`, `length`, `crc32`)
 | Max batch / buffer | 64 KiB | `--size`, recv buffer, USO/URO caps |
 | Default MSS | 1400 | USO segment hint |
 | Max MSS | 1472 | Per-segment UDP payload cap |
-| Socket SNDBUF/RCVBUF | 1 MiB | Set in USO socket setup |
+| Socket SNDBUF/RCVBUF | 1 MiB | Set in USO/URO socket setup |
 
 ## Related references
 
 - Sunshine `send_batch()` — `src/platform/windows/misc.cpp` (USO send pattern)
-- Windows USO / coalescing: `UDP_SEND_MSG_SIZE`, `UDP_RECV_MAX_COALESCED_SIZE`, `WSASendMsg` / `WSARecvMsg`
+- Windows: `UDP_SEND_MSG_SIZE`, `UDP_RECV_MAX_COALESCED_SIZE`, `WSASendMsg` / `WSARecvMsg`

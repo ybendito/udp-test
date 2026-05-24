@@ -1,10 +1,9 @@
-# Downloads vendored Asio and Boost into deps/ at pinned commits.
+# Downloads vendored Boost into deps/ at a pinned commit.
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $Deps = Join-Path $Root "deps"
 
-# Pinned commits (see README.md).
-$AsioCommit = "bd500f0a018db9a845ebaaed5c0318343ae9f497"
+# Pinned commit (see README.md).
 $BoostCommit = "8c3ca159ca9e5ac4b56ced6a6f146d5fef3650bc"
 
 New-Item -ItemType Directory -Force -Path $Deps | Out-Null
@@ -24,7 +23,6 @@ function Ensure-Repo($Name, $Url, $Commit) {
     return $Path
 }
 
-$asioPath = Ensure-Repo "asio" "https://github.com/chriskohlhoff/asio.git" $AsioCommit
 $boostPath = Ensure-Repo "boost" "https://github.com/boostorg/boost.git" $BoostCommit
 
 Write-Host "Initializing Boost submodules required by boostudp ..."
@@ -51,5 +49,4 @@ git submodule update --init `
 Pop-Location
 
 Write-Host "Done."
-Write-Host "  Asio (standalone): $asioPath @ $AsioCommit"
-Write-Host "  Boost (+ Asio):    $boostPath @ $BoostCommit"
+Write-Host "  Boost: $boostPath @ $BoostCommit"
