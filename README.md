@@ -21,8 +21,7 @@ Reported in testing:
 
 | Build | Behavior |
 |-------|----------|
-| **20080** | `WSASendMsg` USO works; multi-homed OK with default `--source` (egress + `IP_PKTINFO` ifindex toward `--dest`). |
-| **21000** | `WSASendMsg` fails (e.g. 10022); not suitable for this tool. |
+| **26080** | `WSASendMsg` USO works; multi-homed OK with default `--source` (egress + `IP_PKTINFO` ifindex toward `--dest`). |
 | **26100 / Windows 11 2025** | `WSASendMsg` succeeds; whether NDIS sees hardware USO depends on driver/filters (investigate separately). Default `IP_PKTINFO` path works on 26100 in recent testing. |
 
 If routing is ambiguous, set `--source` to the IP on the subnet that reaches `--dest`.
