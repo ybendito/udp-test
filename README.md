@@ -92,7 +92,7 @@ Optional receive coalescing:
 build\Release\boostudp_server.exe --port 5000 --count 10 -v --uro
 ```
 
-Without `--count`, the server exits after an idle timeout once traffic stops. Use **`--loop`** to start another idle session after each summary (not combinable with `--count`).
+Without `--count`, the server exits after an idle timeout once traffic stops. Use **`--loop`** to start another idle session after each summary (not combinable with `--count`). With `--loop`, stdout is flushed after each session so `> outfile` shows progress as rounds complete.
 
 ```text
 build\Release\boostudp_server.exe --port 5000 -v --loop

@@ -555,6 +555,10 @@ void run_server(const boostudp::ServerOptions& options)
 
         run_receive_loop(socket, options, use_uro);
 
+        if (options.loop) {
+            std::cout.flush();
+        }
+
         ++session;
         if (!options.loop) {
             break;
