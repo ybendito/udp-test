@@ -23,6 +23,7 @@
 namespace {
 
 constexpr auto kIdleTimeout = std::chrono::seconds(3);
+constexpr int kReceiveBufferBytes = 1024 * 1024;
 
 struct ServerStats {
     std::size_t batches = 0;
@@ -515,6 +516,8 @@ void run_server(const boostudp::ServerOptions& options)
     socket.open(listenEndpoint.protocol());
     socket.set_option(boost::asio::socket_base::reuse_address(true));
     socket.bind(listenEndpoint);
+    socket.set_option(
+        boost::asio::socket_base::receive_buffer_size(kReceiveBufferBytes));
 
 #ifdef _WIN32
     const bool use_uro = options.uro;
@@ -526,14 +529,6 @@ void run_server(const boostudp::ServerOptions& options)
                 cfg_error)) {
             throw std::runtime_error(cfg_error);
         }
-
-        int rcvbuf = 1024 * 1024;
-        ::setsockopt(
-            socket.native_handle(),
-            SOL_SOCKET,
-            SO_RCVBUF,
-            reinterpret_cast<const char*>(&rcvbuf),
-            sizeof(rcvbuf));
     }
 #else
     const bool use_uro = false;
@@ -541,6 +536,7 @@ void run_server(const boostudp::ServerOptions& options)
 
     if (options.verbose) {
         std::cout << "listen " << listenEndpoint << '\n';
+        std::cout << "  SO_RCVBUF request=" << kReceiveBufferBytes << " bytes\n";
     }
 
     std::size_t session = 0;

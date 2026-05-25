@@ -186,7 +186,7 @@ struct PacketHeader {   // packed, little-endian on x86
 | Max batch / buffer | 64 KiB | `--size`, recv buffer, USO/URO caps |
 | Default MSS | 1400 | USO segment hint |
 | Max MSS | 1472 | Per-segment UDP payload cap |
-| Socket SNDBUF/RCVBUF | 1 MiB | Set in USO/URO socket setup |
+| Server SO_RCVBUF | 1 MiB | Always after bind (USO/URO burst); `--uro` adds coalesced recv |
 
 ## Related references
 
