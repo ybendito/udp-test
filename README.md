@@ -104,7 +104,7 @@ Verbose output:
 - **Single datagram per batch** (`--mss 0` on sender): `ok seq=N 33792b`
 - **Reassembled from multiple UDP segments**: `ok seq=N 33792b mss=1408 segs=24` (`mss` matches sender `--mss`, not the first post-header slice)
 
-Summary line: `batches=… frags=… bad=… lost=… dup=… ooo=…`
+Summary line: `batches=… frags=… bad=… lost=… dup=… ooo=…` (`bad` = failed or incomplete logical batches, not resync bytes skipped)
 
 ### 2. Send from the PC (or guest if built there)
 

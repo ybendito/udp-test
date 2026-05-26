@@ -28,7 +28,7 @@ constexpr int kReceiveBufferBytes = 1024 * 1024;
 struct ServerStats {
     std::size_t batches = 0;
     std::size_t fragments = 0;
-    std::size_t corrupted = 0;
+    std::size_t bad_batches = 0;
     std::size_t lost = 0;
     std::size_t duplicates = 0;
     std::size_t out_of_order = 0;
@@ -168,11 +168,25 @@ void print_summary(const ServerStats& stats)
 {
     std::cout << "batches=" << stats.batches
               << " frags=" << stats.fragments
-              << " bad=" << stats.corrupted
+              << " bad=" << stats.bad_batches
               << " lost=" << stats.lost
               << " dup=" << stats.duplicates
               << " ooo=" << stats.out_of_order << '\n';
 }
+
+void ingest_fragment(
+    const boost::asio::ip::udp::endpoint& remote,
+    const char* data,
+    std::size_t length,
+    ServerStats& stats,
+    bool verbose,
+    BatchReassembly& reassembly);
+
+std::size_t find_next_batch_header_offset(
+    const char* data,
+    std::size_t len,
+    std::optional<std::uint32_t> want_seq,
+    std::optional<std::uint32_t>& wire_batch_total);
 
 bool try_complete_batch(
     const boost::asio::ip::udp::endpoint& remote,
@@ -181,7 +195,7 @@ bool try_complete_batch(
     bool verbose)
 {
     if (reassembly.expected < boostudp::kPacketHeaderSize) {
-        ++stats.corrupted;
+        ++stats.bad_batches;
         reset_reassembly(reassembly);
         return false;
     }
@@ -192,7 +206,7 @@ bool try_complete_batch(
     const auto session_check =
         boostudp::validate_batch_session(header, stats.wire_batch_total);
     if (session_check != boostudp::BatchValidation::Ok) {
-        ++stats.corrupted;
+        ++stats.bad_batches;
         if (verbose) {
             std::cout << remote << ' '
                       << boostudp::validation_reason(session_check)
@@ -206,14 +220,62 @@ bool try_complete_batch(
     const auto validation = boostudp::validate_batch(
         reassembly.buffer.data(), reassembly.expected);
     if (validation != boostudp::BatchValidation::Ok) {
-        ++stats.corrupted;
+        ++stats.bad_batches;
+
+        // Only salvage tail bytes that start a *complete* batch passing CRC.
+        // Scanning for header-shaped bit patterns inside a corrupt batch (e.g. at
+        // +1616) creates false seq=N reassembly and inflates bad=.
+        std::vector<char> carry;
+        const std::size_t batch_len = reassembly.expected;
+        if (batch_len > boostudp::kPacketHeaderSize) {
+            std::optional<std::uint32_t> want_seq;
+            if (boostudp::header_meta_plausible(
+                    header.seq, header.batch_total, header.length)) {
+                if (header.seq + 1 < header.batch_total) {
+                    want_seq = header.seq + 1;
+                }
+            }
+
+            const std::size_t salvage_at = find_next_batch_header_offset(
+                reassembly.buffer.data(),
+                batch_len,
+                want_seq,
+                stats.wire_batch_total);
+            if (salvage_at < batch_len) {
+                boostudp::PacketHeader candidate {};
+                std::memcpy(
+                    &candidate,
+                    reassembly.buffer.data() + salvage_at,
+                    boostudp::kPacketHeaderSize);
+                const std::size_t suffix = batch_len - salvage_at;
+                if (suffix >= candidate.length
+                    && boostudp::validate_batch(
+                           reassembly.buffer.data() + salvage_at, candidate.length)
+                        == boostudp::BatchValidation::Ok) {
+                    carry.assign(
+                        reassembly.buffer.begin()
+                            + static_cast<std::ptrdiff_t>(salvage_at),
+                        reassembly.buffer.end());
+                }
+            }
+        }
+
         if (verbose) {
             std::cout << remote << ' '
                       << boostudp::validation_reason(validation)
                       << " batch seq=" << header.seq << '/'
-                      << header.batch_total << '\n';
+                      << header.batch_total;
+            if (!carry.empty()) {
+                std::cout << " resync+" << carry.size() << "b";
+            }
+            std::cout << '\n';
         }
+
         reset_reassembly(reassembly);
+        if (!carry.empty()) {
+            ingest_fragment(
+                remote, carry.data(), carry.size(), stats, verbose, reassembly);
+        }
         return false;
     }
 
@@ -258,6 +320,56 @@ std::size_t find_batch_header_offset(const char* data, std::size_t len)
     return len;
 }
 
+// Scan from i>=1; optional seq/batch_total for resync after a failed batch.
+std::size_t find_next_batch_header_offset(
+    const char* data,
+    std::size_t len,
+    std::optional<std::uint32_t> want_seq,
+    std::optional<std::uint32_t>& wire_batch_total)
+{
+    if (len < boostudp::kPacketHeaderSize) {
+        return len;
+    }
+
+    const std::size_t start = 1;
+    const std::size_t last = len - boostudp::kPacketHeaderSize;
+    for (std::size_t i = start; i <= last; ++i) {
+        const std::uint32_t batch_len =
+            boostudp::peek_batch_length(data + i, len - i);
+        if (batch_len < boostudp::kPacketHeaderSize
+            || batch_len > boostudp::kMaxBatchSize) {
+            continue;
+        }
+
+        boostudp::PacketHeader candidate {};
+        std::memcpy(
+            &candidate,
+            data + i,
+            boostudp::kPacketHeaderSize);
+        if (!boostudp::header_meta_plausible(
+                candidate.seq, candidate.batch_total, candidate.length)) {
+            continue;
+        }
+        if (want_seq && candidate.seq != *want_seq) {
+            continue;
+        }
+        if (wire_batch_total && candidate.batch_total != *wire_batch_total) {
+            continue;
+        }
+        if (boostudp::validate_batch_session(candidate, wire_batch_total)
+            != boostudp::BatchValidation::Ok) {
+            continue;
+        }
+        if (candidate.length != batch_len) {
+            continue;
+        }
+
+        return i;
+    }
+
+    return len;
+}
+
 void ingest_fragment(
     const boost::asio::ip::udp::endpoint& remote,
     const char* data,
@@ -288,7 +400,6 @@ void ingest_fragment(
                     return;
                 }
                 if (aligned > 0) {
-                    stats.corrupted += aligned;
                     if (verbose) {
                         std::cout << remote << " resync skip " << aligned
                                   << " byte(s)\n";
@@ -307,10 +418,22 @@ void ingest_fragment(
             const std::uint32_t expected_length = boostudp::peek_batch_length(
                 reassembly.buffer.data(), reassembly.buffer.size());
             if (expected_length == 0) {
-                ++stats.corrupted;
-                if (verbose) {
-                    std::cout << remote << " bad magic/meta (resync)\n";
+                if (reassembly.buffer.size() > 1) {
+                    const std::size_t aligned = find_batch_header_offset(
+                        reassembly.buffer.data(), reassembly.buffer.size());
+                    if (aligned > 0 && aligned < reassembly.buffer.size()) {
+                        if (verbose) {
+                            std::cout << remote << " resync skip " << aligned
+                                      << " byte(s)\n";
+                        }
+                        reassembly.buffer.erase(
+                            reassembly.buffer.begin(),
+                            reassembly.buffer.begin()
+                                + static_cast<std::ptrdiff_t>(aligned));
+                        continue;
+                    }
                 }
+
                 reassembly.buffer.erase(reassembly.buffer.begin());
                 continue;
             }
@@ -323,20 +446,13 @@ void ingest_fragment(
             const auto session_check =
                 boostudp::validate_batch_session(header, stats.wire_batch_total);
             if (session_check != boostudp::BatchValidation::Ok) {
-                ++stats.corrupted;
-                if (verbose) {
-                    std::cout << remote << ' '
-                              << boostudp::validation_reason(session_check)
-                              << " (resync) seq=" << header.seq << '/'
-                              << header.batch_total << '\n';
-                }
                 reassembly.buffer.erase(reassembly.buffer.begin());
                 continue;
             }
 
             if (expected_length < boostudp::kPacketHeaderSize
                 || expected_length > boostudp::kMaxBatchSize) {
-                ++stats.corrupted;
+                ++stats.bad_batches;
                 if (verbose) {
                     std::cout << remote << " bad length " << expected_length
                               << '\n';
@@ -503,7 +619,7 @@ void run_receive_loop(
     }
 
     if (reassembly.active) {
-        ++stats.corrupted;
+        ++stats.bad_batches;
         if (options.verbose) {
             boostudp::PacketHeader header {};
             if (reassembly.filled >= boostudp::kPacketHeaderSize) {
