@@ -502,6 +502,23 @@ void run_receive_loop(
         clear_receive_timeout(socket);
     }
 
+    if (reassembly.active) {
+        ++stats.corrupted;
+        if (options.verbose) {
+            boostudp::PacketHeader header {};
+            if (reassembly.filled >= boostudp::kPacketHeaderSize) {
+                std::memcpy(
+                    &header,
+                    reassembly.buffer.data(),
+                    boostudp::kPacketHeaderSize);
+            }
+            std::cout << remote << " incomplete batch seq=" << header.seq << '/'
+                      << header.batch_total << ' ' << reassembly.filled << '/'
+                      << reassembly.expected << '\n';
+        }
+        reset_reassembly(reassembly);
+    }
+
     finalize_lost(stats, std::nullopt);
     print_summary(stats);
 }
