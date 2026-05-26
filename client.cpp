@@ -41,12 +41,7 @@ void send_batch_windows(
         std::cout << "  plain " << result.total_bytes << " bytes (one datagram, no USO)\n";
     } else {
         std::cout << "  USO " << result.total_bytes << " bytes, "
-                  << result.segments_sent << " segment(s), mss=" << mss
-                  << ", path=" << boostudp::uso_send_path_name(result.path);
-        if (interface_index != 0 && result.path == boostudp::UsoSendPath::PktinfoIfindex) {
-            std::cout << " ifindex=" << interface_index;
-        }
-        std::cout << '\n';
+                  << result.segments_sent << " segment(s), mss=" << mss << '\n';
     }
 }
 #else

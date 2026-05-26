@@ -150,7 +150,7 @@ build\Release\boostudp_client.exe --dest 10.0.0.15 --port 5000 --size 33792 --ms
 | `--size <bytes>` | Logical batch size, 16..65536 (required; includes 16-byte BDUP header) |
 | `--count <n>` | Batches to send (default `10`) |
 | `--mss <bytes>` | USO segment size (default `1400`; `0` = plain `sendto`, no USO) |
-| `--no-pktinfo` | `WSASendMsg` without `IP_PKTINFO` (bind-only; logs `path=bind-only`) |
+| `--no-pktinfo` | `WSASendMsg` without `IP_PKTINFO` (bind-only; logged once at startup) |
 | `--completion-routine` | `WSASendMsg` with completion routine + alertable `SleepEx` |
 
 ### Wireshark
