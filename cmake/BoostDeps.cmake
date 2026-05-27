@@ -1,7 +1,9 @@
 set(BOOSTUDP_BOOST_ROOT "${CMAKE_SOURCE_DIR}/deps/boost" CACHE PATH "Vendored Boost root")
 
 if(NOT EXISTS "${BOOSTUDP_BOOST_ROOT}/boost-build.jam")
-    message(FATAL_ERROR "Vendored Boost not found. Run scripts/fetch-deps.ps1")
+    message(FATAL_ERROR
+        "Vendored Boost not found. Run scripts/fetch-deps.ps1 (Windows) "
+        "or linux/scripts/fetch-deps.sh (Linux).")
 endif()
 
 set(BOOSTUDP_BOOST_LIBS
