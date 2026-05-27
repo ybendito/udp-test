@@ -1,8 +1,16 @@
-# Cross-platform: LF in repo and on checkout (Linux server scripts, shared sources).
-* text=auto eol=lf
+# Default: Git detects text; no repo-wide eol= (avoids whole-tree CRLF/LF noise on Windows).
+* text=auto
 
+# Shared C/C++ and Linux paths: LF in repo (f2, scripts, server).
+*.cpp text eol=lf
+*.hpp text eol=lf
+*.c text eol=lf
+*.h text eol=lf
+CMakeLists.txt text eol=lf
+*.cmake text eol=lf
+*.md text eol=lf
 *.sh text eol=lf
-linux/scripts/** text eol=lf
+linux/** text eol=lf
 
 *.bat text eol=crlf
 *.ps1 text eol=crlf
