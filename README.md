@@ -6,8 +6,8 @@ Binaries:
 
 | Target | Role |
 |--------|------|
-| `boostudp_client` | Sender (USO via `WSASendMsg`, or plain `sendto` with `--mss 0`) |
-| `boostudp_server` | Receiver (app-level batch reassembly + CRC; optional `--uro`) |
+| `boostudp_client` | Sender (Windows; USO via `WSASendMsg`, or plain `sendto` with `--mss 0`) |
+| `boostudp_server` | Receiver (batch reassembly + CRC; optional `--uro` on Windows) |
 
 ## Requirements
 
@@ -67,7 +67,18 @@ build\Release\boostudp_server.exe
 
 Release builds link the **static MSVC runtime** (`/MT`).
 
-### Manual CMake
+### Linux (server only)
+
+Scripts and build output live under `linux/`; sources are unchanged at the repo root. **No install** — run `linux/build/boostudp_server` directly.
+
+```bash
+linux/scripts/fetch-deps.sh
+linux/scripts/build.sh
+```
+
+See [linux/README.md](linux/README.md). `--uro` is Windows-only; Linux uses `recvfrom` per datagram.
+
+### Manual CMake (Windows)
 
 ```bat
 mkdir build
@@ -92,7 +103,7 @@ Optional receive coalescing:
 build\Release\boostudp_server.exe --port 5000 --count 10 -v --uro
 ```
 
-Without `--count`, the server exits after an idle timeout once traffic stops. Use **`--loop`** to start another idle session after each summary (not combinable with `--count`). With `--loop`, stdout is flushed after each session so `> outfile` shows progress as rounds complete.
+**Default (no server `--count`)** — matches client-only `--count`: wait forever for the first datagram; receive until **3 s** with no further datagrams (timer resets on every recv); print summary and exit. With `-v`, prints `idle timeout (3s), ending session` when the idle period elapses. You do **not** need server `--count` for normal client tests. Optional server **`--count N`** caps how many batches to accept. Do **not** use **`--loop`** if you want the process to exit after one client run. With `--loop`, stdout is flushed after each session so `> outfile` shows progress as rounds complete.
 
 ```text
 build\Release\boostudp_server.exe --port 5000 -v --loop
