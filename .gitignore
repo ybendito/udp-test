@@ -20,6 +20,11 @@
 **/__pycache__/
 *.pyc
 
+# Local agent/SSH test helpers (not part of the product)
+/linux/scripts/f2_*.py
+/linux/scripts/e2e_*.py
+/linux/scripts/udp_ping.py
+
 # Binaries
 *.exe
 *.pdb
