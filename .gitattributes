@@ -1,0 +1,18 @@
+# Cross-platform: LF in repo and on checkout (Linux server scripts, shared sources).
+* text=auto eol=lf
+
+*.sh text eol=lf
+linux/scripts/** text eol=lf
+
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+*.exe binary
+*.pdb binary
+*.ilk binary
+*.obj binary
+*.o binary
+*.a binary
+*.lib binary
+*.dll binary
+*.so binary

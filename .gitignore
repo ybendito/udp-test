@@ -3,6 +3,7 @@
 
 # CMake / Visual Studio build output
 /build/
+/linux/build/
 /out/
 
 # IDE
@@ -11,6 +12,13 @@
 *.suo
 *.sdf
 *.opensdf
+
+# Windows accidental redirect target
+/nul
+
+# Python
+**/__pycache__/
+*.pyc
 
 # Binaries
 *.exe
