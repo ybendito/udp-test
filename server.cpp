@@ -17,6 +17,7 @@
 #ifdef _WIN32
 #include <winsock2.h>
 #else
+#include <poll.h>
 #include <sys/socket.h>
 #endif
 
@@ -24,6 +25,10 @@ namespace {
 
 constexpr auto kIdleTimeout = std::chrono::seconds(3);
 constexpr int kReceiveBufferBytes = 1024 * 1024;
+#ifndef _WIN32
+// Linux: SO_RCVTIMEO {0,0} = poll (never block), not infinite wait.
+constexpr auto kBlockingRecvTimeout = std::chrono::hours(24 * 365);
+#endif
 
 struct ServerStats {
     std::size_t batches = 0;
@@ -73,7 +78,33 @@ void set_receive_timeout(
 
 void clear_receive_timeout(boost::asio::ip::udp::socket& socket)
 {
+#ifdef _WIN32
+    // 0 = blocking recv (no timeout).
     set_receive_timeout(socket, std::chrono::milliseconds(0));
+#else
+    set_receive_timeout(socket, kBlockingRecvTimeout);
+#endif
+}
+
+// No idle_deadline: block until data (first packet of a session). Otherwise SO_RCVTIMEO.
+void apply_recv_timeout_for_session(
+    boost::asio::ip::udp::socket& socket,
+    const BatchReassembly& reassembly,
+    std::optional<std::chrono::steady_clock::time_point> idle_deadline)
+{
+    (void)reassembly;
+    if (!idle_deadline) {
+        clear_receive_timeout(socket);
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+        *idle_deadline - now);
+    if (remaining <= std::chrono::milliseconds::zero()) {
+        remaining = std::chrono::milliseconds(1);
+    }
+    set_receive_timeout(socket, remaining);
 }
 
 bool is_receive_timeout(const boost::system::error_code& ec)
@@ -81,6 +112,33 @@ bool is_receive_timeout(const boost::system::error_code& ec)
     return ec == boost::asio::error::timed_out
         || ec == boost::asio::error::try_again
         || ec == boost::asio::error::would_block;
+}
+
+// Wait until a datagram is readable or the deadline elapses (idle mode).
+bool wait_udp_readable(
+    boost::asio::ip::udp::socket& socket,
+    std::chrono::milliseconds timeout)
+{
+    if (timeout <= std::chrono::milliseconds::zero()) {
+        return false;
+    }
+
+#ifdef _WIN32
+    fd_set readfds;
+    FD_ZERO(&readfds);
+    FD_SET(socket.native_handle(), &readfds);
+    timeval tv {};
+    tv.tv_sec = static_cast<long>(timeout.count() / 1000);
+    tv.tv_usec = static_cast<long>((timeout.count() % 1000) * 1000);
+    const int rc = ::select(0, &readfds, nullptr, nullptr, &tv);
+    return rc > 0 && FD_ISSET(socket.native_handle(), &readfds);
+#else
+    struct pollfd pfd {};
+    pfd.fd = socket.native_handle();
+    pfd.events = POLLIN;
+    const int rc = ::poll(&pfd, 1, static_cast<int>(timeout.count()));
+    return rc > 0 && (pfd.revents & POLLIN) != 0;
+#endif
 }
 
 void reset_reassembly(BatchReassembly& reassembly)
@@ -571,7 +629,9 @@ void run_receive_loop(
 {
     if (options.verbose) {
         if (options.batchCount) {
-            std::cout << "  expect " << *options.batchCount << " batch(es)\n";
+            std::cout << "  expect " << *options.batchCount
+                      << " batch(es); idle=" << kIdleTimeout.count()
+                      << "s after first traffic\n";
         } else {
             std::cout << "  idle=" << kIdleTimeout.count() << "s after first traffic\n";
         }
@@ -600,23 +660,90 @@ void run_receive_loop(
     };
 
     if (options.batchCount) {
-        while (stats.batches < *options.batchCount) {
+        const std::size_t want_batches = *options.batchCount;
+        clear_receive_timeout(socket);
+        std::optional<std::chrono::steady_clock::time_point> idle_deadline;
+        while (stats.batches < want_batches) {
+            if (idle_deadline && !reassembly.active
+                && std::chrono::steady_clock::now() >= *idle_deadline) {
+                break;
+            }
+            apply_recv_timeout_for_session(socket, reassembly, idle_deadline);
             if (!receive_one()) {
-                throw std::runtime_error("unexpected receive timeout");
+                if (!idle_deadline) {
+                    continue;
+                }
+                break;
+            }
+            idle_deadline = std::chrono::steady_clock::now() + kIdleTimeout;
+            if (stats.batches >= want_batches) {
+                break;
             }
         }
+        clear_receive_timeout(socket);
+
+        if (reassembly.active) {
+            ++stats.bad_batches;
+            if (options.verbose) {
+                boostudp::PacketHeader header {};
+                if (reassembly.filled >= boostudp::kPacketHeaderSize) {
+                    std::memcpy(
+                        &header,
+                        reassembly.buffer.data(),
+                        boostudp::kPacketHeaderSize);
+                }
+                std::cout << remote << " incomplete batch seq=" << header.seq
+                          << '/' << header.batch_total << ' '
+                          << reassembly.filled << '/'
+                          << reassembly.expected << '\n';
+            }
+            reset_reassembly(reassembly);
+        }
+
         finalize_lost(stats, options.batchCount);
         print_summary(stats);
+        std::cout.flush();
         return;
     }
 
-    clear_receive_timeout(socket);
-    if (receive_one()) {
-        set_receive_timeout(socket, kIdleTimeout);
-        while (receive_one()) {
+    // Idle mode (no server --count): block for first datagram, then 3s with no
+    // further UDP (poll/select; SO_RCVTIMEO alone is unreliable on Linux).
+    std::optional<std::chrono::steady_clock::time_point> idle_deadline;
+    for (;;) {
+        const auto now = std::chrono::steady_clock::now();
+        if (idle_deadline && now >= *idle_deadline) {
+            if (options.verbose) {
+                std::cout << "  idle timeout (" << kIdleTimeout.count()
+                          << "s), ending session\n";
+            }
+            break;
         }
+
+        if (idle_deadline) {
+            auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(
+                *idle_deadline - now);
+            if (remaining <= std::chrono::milliseconds::zero()) {
+                continue;
+            }
+            if (!wait_udp_readable(socket, remaining)) {
+                if (options.verbose) {
+                    std::cout << "  idle timeout (" << kIdleTimeout.count()
+                              << "s), ending session\n";
+                }
+                break;
+            }
+        }
+
         clear_receive_timeout(socket);
+        if (!receive_one()) {
+            if (!idle_deadline) {
+                continue;
+            }
+            break;
+        }
+        idle_deadline = std::chrono::steady_clock::now() + kIdleTimeout;
     }
+    clear_receive_timeout(socket);
 
     if (reassembly.active) {
         ++stats.bad_batches;
@@ -637,6 +764,7 @@ void run_receive_loop(
 
     finalize_lost(stats, std::nullopt);
     print_summary(stats);
+    std::cout.flush();
 }
 
 void run_server(const boostudp::ServerOptions& options)
@@ -670,6 +798,7 @@ void run_server(const boostudp::ServerOptions& options)
     if (options.verbose) {
         std::cout << "listen " << listenEndpoint << '\n';
         std::cout << "  SO_RCVBUF request=" << kReceiveBufferBytes << " bytes\n";
+        std::cout.flush();
     }
 
     std::size_t session = 0;
